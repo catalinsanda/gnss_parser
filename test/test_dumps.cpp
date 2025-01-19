@@ -123,7 +123,7 @@ void test_parse_hex_dump(const char *filename)
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, valid_messages,
                                      "No valid messages found in hex dump");
-    TEST_ASSERT_LESS_OR_EQUAL(expected_messages, (int)((double)valid_messages * 0.95d));
+    TEST_ASSERT_LESS_OR_EQUAL(expected_messages, (int)((double)valid_messages * 0.99d));
 }
 
 void test_parse_hex_dump_1()

@@ -328,9 +328,10 @@ uint8_t GNSSParser::calculateNMEAChecksum(size_t start, size_t length)
 {
     uint8_t checksum = 0;
     bool started = false;
+    bool ended = false;
 
-    for (size_t i = 0; i < length - 5; i++)
-    { // Exclude checksum and CRLF
+    for (size_t i = 0; i < length && !ended; i++)
+    {
         size_t pos = (start + i) % BUFFER_SIZE;
         char c = buffer_[pos];
 
@@ -341,9 +342,12 @@ uint8_t GNSSParser::calculateNMEAChecksum(size_t start, size_t length)
         }
 
         if (c == '*')
-            break;
+        {
+            ended = true;
+            continue;
+        }
 
-        if (started)
+        if (started && !ended)
         {
             checksum ^= c;
         }
@@ -354,45 +358,17 @@ uint8_t GNSSParser::calculateNMEAChecksum(size_t start, size_t length)
 
 bool GNSSParser::validateNMEAMessage(size_t start, size_t length)
 {
-    // Minimum length check: $+msg+*+2chars+\r\n
-    if (length < 7)
-        return false;
+    uint8_t calculated_checksum = calculateNMEAChecksum(start, length);
 
-    if (buffer_[(start + length - 5) % BUFFER_SIZE] != '*')
-    {
-        return false;
-    }
+    char c1 = buffer_[(start + length - 4) % BUFFER_SIZE];
+    char c2 = buffer_[(start + length - 3) % BUFFER_SIZE];
 
-    uint8_t calculated_checksum = 0;
-    bool started = false;
-
-    for (size_t i = 0; i < length - 5; i++)
-    {
-        size_t pos = (start + i) % BUFFER_SIZE;
-        char c = buffer_[pos];
-
-        if (c == '$' || c == '!')
-        {
-            started = true;
-            continue;
-        }
-
-        if (started)
-        {
-            calculated_checksum ^= c;
-        }
-    }
-
-    char checksum_str[3];
-    checksum_str[0] = buffer_[(start + length - 4) % BUFFER_SIZE];
-    checksum_str[1] = buffer_[(start + length - 3) % BUFFER_SIZE];
-    checksum_str[2] = '\0';
-
-    uint8_t received_checksum;
-    if (sscanf(checksum_str, "%hhx", &received_checksum) != 1)
-    {
-        return false;
-    }
+    uint8_t received_checksum =
+        ((c1 >= '0' && c1 <= '9' ? c1 - '0' : c1 >= 'A' && c1 <= 'F' ? c1 - 'A' + 10
+                                                                     : 0)
+         << 4) |
+        (c2 >= '0' && c2 <= '9' ? c2 - '0' : c2 >= 'A' && c2 <= 'F' ? c2 - 'A' + 10
+                                                                    : 0);
 
     return calculated_checksum == received_checksum;
 }

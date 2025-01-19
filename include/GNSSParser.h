@@ -16,7 +16,7 @@ typedef uint8_t byte;
 class GNSSParser
 {
 public:
-    static constexpr size_t BUFFER_SIZE = 2048;
+    static constexpr size_t BUFFER_SIZE = 4096;
     static constexpr size_t MAX_MESSAGES = 128;
 
     struct Message

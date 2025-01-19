@@ -285,10 +285,10 @@ void test_parse_log_file(const char *filename, uint32_t expected_nmea_count,
         }
     }
 
-    for (int i = 0; i++; i++)
+    for (int i = 0; i < sizeof(buffer) / sizeof(buffer[0]); i++)
         buffer[i] = 0;
 
-    for (int i = 0; i < 1024 / sizeof(buffer); i++)
+    for (int i = 0; i < GNSSParser::BUFFER_SIZE / sizeof(buffer); i++)
     {
         if (parser.available())
             process_parser_messages(parser, nmea_count, rtcm_count);
@@ -392,9 +392,9 @@ void test_parse_log_file_656_43()
     test_parse_log_file("test/test-data/test-data-656-43.bin", 656, 43);
 }
 
-void test_parse_log_file_33807_2193()
+void test_parse_log_file_33816_2193()
 {
-    test_parse_log_file("test/test-data/test-data-33807-2193.bin", 33807, 2193);
+    test_parse_log_file("test/test-data/test-data-33816-2193.bin", 33816, 2193);
 }
 
 void register_nmea_tests()
@@ -409,5 +409,5 @@ void register_nmea_tests()
     RUN_TEST(test_parse_log_file_5_2);
     RUN_TEST(test_parse_log_file_56_4);
     RUN_TEST(test_parse_log_file_656_43);
-    RUN_TEST(test_parse_log_file_33807_2193);
+    RUN_TEST(test_parse_log_file_33816_2193);
 }
