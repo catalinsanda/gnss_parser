@@ -50,19 +50,19 @@ uint32_t GNSSParser::calculateRTCM3CRC(const uint8_t *data, size_t length)
     return crc & 0xFFFFFF;
 }
 
-void GNSSParser::addMessageToQueue(Message::Type type, size_t start, size_t length,
-                                   bool valid, const char *error)
+void GNSSParser::addMessageToQueue(Message::Type type, size_t start, size_t length)
 {
     if (message_queue_.size() >= MAX_MESSAGES)
     {
-        StoredMessage &oldest = message_queue_.front();
-        size_t bytes_to_remove = oldest.length;
-        read_pos_ = (read_pos_ + bytes_to_remove) % BUFFER_SIZE;
-        bytes_available_ -= bytes_to_remove;
-        message_queue_.pop();
+        return;
     }
 
-    message_queue_.push({type, start, length, valid, error});
+    if (message_queue_.empty())
+    {
+        earliest_queued_pos_ = start;
+    }
+
+    message_queue_.push({type, start, length});
 }
 
 bool GNSSParser::tryParseRTCM3(size_t start_pos, size_t available_bytes, ParseResult &result)
@@ -78,7 +78,7 @@ bool GNSSParser::tryParseRTCM3(size_t start_pos, size_t available_bytes, ParseRe
         return false;
     }
 
-    uint16_t msg_length = ((buffer_[(start_pos + 1) % BUFFER_SIZE] & 0x0F) << 8) |
+    uint16_t msg_length = ((buffer_[(start_pos + 1) % BUFFER_SIZE] & 0x03) << 8) |
                           buffer_[(start_pos + 2) % BUFFER_SIZE];
 
     if (msg_length > 1023)
@@ -91,7 +91,7 @@ bool GNSSParser::tryParseRTCM3(size_t start_pos, size_t available_bytes, ParseRe
 
     if (available_bytes < total_length)
     {
-        result = {false, false, total_length, "Message incomplete"};
+        result = {true, false, total_length, "Message incomplete"};
         return true;
     }
 
@@ -104,22 +104,18 @@ bool GNSSParser::tryParseNMEA(size_t start_pos, size_t available_bytes, ParseRes
 {
     if (buffer_[start_pos] != '$' && buffer_[start_pos] != '!')
     {
+        result = {false, false, 0, "No message end found"};
         return false;
     }
 
     // Look for end of message within max NMEA length
     // Spec says it should be 82, but I see valid NMEA sentences which are longer.
-    const size_t max_nmea_length = 96;
-
-    if (available_bytes > max_nmea_length)
-    {
-        result = {false, true, 0, "Message too long to be a NMEA sentence"};
-        return true;
-    }
+    const size_t max_nmea_length = 128;
 
     size_t search_length = std::min(available_bytes, max_nmea_length);
     size_t msg_length = 0;
     bool found_end = false;
+    bool full_search = false;
 
     for (size_t i = 0; i < search_length; i++)
     {
@@ -129,15 +125,35 @@ bool GNSSParser::tryParseNMEA(size_t start_pos, size_t available_bytes, ParseRes
             found_end = true;
             break;
         }
+
+        if (i == max_nmea_length - 1)
+        {
+            full_search = true;
+        }
     }
 
     if (!found_end)
     {
-        result = {false, false, 0, "No message end found"};
+        if (full_search)
+            result = {false, true, 0, "No final \\n found"};
+        else
+            result = {false, false, 0, "No message end found"};
         return true;
     }
 
     bool is_valid = validateNMEAMessage(start_pos, msg_length);
+
+    if (!is_valid)
+    {
+        uint8_t log_buffer[256];
+        auto len = std::min(msg_length - 1, sizeof(log_buffer));
+        for (int i = 0; i < len; i++)
+            log_buffer[i] = buffer_[(start_pos + i) % BUFFER_SIZE];
+
+        log_buffer[len] = 0;
+        printf("Invalid message: %s\n", log_buffer);
+    }
+
     result = {is_valid, true, msg_length, is_valid ? nullptr : "Checksum validation failed"};
     return true;
 }
@@ -150,36 +166,35 @@ void GNSSParser::scanBuffer()
     while (remaining_bytes >= 6)
     {
         ParseResult result;
-        bool message_start_found = false;
 
         if (tryParseRTCM3(scan_pos, remaining_bytes, result))
         {
-            message_start_found = true;
-            if (result.valid)
+            if (result.valid && result.complete)
             {
-                addMessageToQueue(Message::Type::RTCM3, scan_pos, result.length, true, result.error);
+                addMessageToQueue(Message::Type::RTCM3, scan_pos, result.length);
                 scan_pos = (scan_pos + result.length) % BUFFER_SIZE;
                 remaining_bytes -= result.length;
                 continue;
             }
             else if (!result.complete)
             {
+                // Wait for more bytes
                 break;
             }
         }
 
-        if (!message_start_found && tryParseNMEA(scan_pos, remaining_bytes, result))
+        if (tryParseNMEA(scan_pos, remaining_bytes, result))
         {
-            message_start_found = true;
-            if (result.valid)
+            if (result.valid && result.complete)
             {
-                addMessageToQueue(Message::Type::NMEA, scan_pos, result.length, true, result.error);
+                addMessageToQueue(Message::Type::NMEA, scan_pos, result.length);
                 scan_pos = (scan_pos + result.length) % BUFFER_SIZE;
                 remaining_bytes -= result.length;
                 continue;
             }
             else if (!result.complete)
             {
+                // Wait for more bytes
                 break;
             }
         }
@@ -194,19 +209,44 @@ void GNSSParser::scanBuffer()
 
 bool GNSSParser::encode(uint8_t byte)
 {
+    // First, calculate available space
+    size_t available = available_write_space();
+    if (available == 0)
+    {
+        return false; // No space available without overwriting queued data
+    }
+
     buffer_[write_pos_] = byte;
     write_pos_ = (write_pos_ + 1) % BUFFER_SIZE;
     bytes_available_++;
 
-    if (bytes_available_ > BUFFER_SIZE)
+    scanBuffer();
+    return !message_queue_.empty();
+}
+
+bool GNSSParser::encode(const uint8_t *buffer, size_t length)
+{
+    if (length > BUFFER_SIZE)
     {
-        read_pos_ = (read_pos_ + 1) % BUFFER_SIZE;
-        bytes_available_ = BUFFER_SIZE;
+        return false; // Buffer too large to process
+    }
+
+    size_t available = available_write_space();
+    if (length > available)
+    {
+        return false; // Not enough space without overwriting queued data
+    }
+
+    // Add each byte to the circular buffer
+    for (size_t i = 0; i < length; i++)
+    {
+        buffer_[write_pos_] = buffer[i];
+        write_pos_ = (write_pos_ + 1) % BUFFER_SIZE;
+        bytes_available_++;
     }
 
     scanBuffer();
-
-    return !message_queue_.empty();
+    return true;
 }
 
 bool GNSSParser::available() const
@@ -218,21 +258,35 @@ GNSSParser::Message GNSSParser::getMessage()
 {
     if (message_queue_.empty())
     {
-        return {GNSSParser::Message::Type::UNKNOWN, nullptr, 0, false, "No message available"};
+        return {GNSSParser::Message::Type::UNKNOWN, nullptr, 0};
     }
 
     StoredMessage msg = message_queue_.front();
     message_queue_.pop();
 
     static uint8_t msg_buffer[BUFFER_SIZE];
-
     for (size_t i = 0; i < msg.length; i++)
     {
         size_t pos = (msg.start + i) % BUFFER_SIZE;
         msg_buffer[i] = buffer_[pos];
     }
 
-    return {msg.type, msg_buffer, msg.length, msg.valid, msg.error};
+    if (!message_queue_.empty())
+        earliest_queued_pos_ = message_queue_.front().start;
+
+    return {msg.type, msg_buffer, msg.length};
+}
+
+size_t GNSSParser::available_write_space() const
+{
+    if (message_queue_.empty())
+    {
+        return BUFFER_SIZE - bytes_available_;
+    }
+    else
+    {
+        return BUFFER_SIZE - ((write_pos_ + BUFFER_SIZE - earliest_queued_pos_) % BUFFER_SIZE);
+    }
 }
 
 void GNSSParser::clear()
@@ -300,36 +354,44 @@ uint8_t GNSSParser::calculateNMEAChecksum(size_t start, size_t length)
 
 bool GNSSParser::validateNMEAMessage(size_t start, size_t length)
 {
+    // Minimum length check: $+msg+*+2chars+\r\n
     if (length < 7)
-        return false; // Minimum valid NMEA message length
+        return false;
 
-    // Find checksum position
-    size_t asterisk_pos = 0;
-    for (size_t i = 0; i < length; i++)
+    if (buffer_[(start + length - 5) % BUFFER_SIZE] != '*')
     {
-        if (buffer_[(start + i) % BUFFER_SIZE] == '*')
+        return false;
+    }
+
+    uint8_t calculated_checksum = 0;
+    bool started = false;
+
+    for (size_t i = 0; i < length - 5; i++)
+    {
+        size_t pos = (start + i) % BUFFER_SIZE;
+        char c = buffer_[pos];
+
+        if (c == '$' || c == '!')
         {
-            asterisk_pos = i;
-            break;
+            started = true;
+            continue;
+        }
+
+        if (started)
+        {
+            calculated_checksum ^= c;
         }
     }
 
-    if (asterisk_pos == 0 || asterisk_pos >= length - 3)
-    {
-        return false; // No checksum or invalid format
-    }
-
-    uint8_t calculated_checksum = calculateNMEAChecksum(start, length);
-
     char checksum_str[3];
-    checksum_str[0] = buffer_[(start + asterisk_pos + 1) % BUFFER_SIZE];
-    checksum_str[1] = buffer_[(start + asterisk_pos + 2) % BUFFER_SIZE];
+    checksum_str[0] = buffer_[(start + length - 4) % BUFFER_SIZE];
+    checksum_str[1] = buffer_[(start + length - 3) % BUFFER_SIZE];
     checksum_str[2] = '\0';
 
     uint8_t received_checksum;
     if (sscanf(checksum_str, "%hhx", &received_checksum) != 1)
     {
-        return false; // Invalid checksum format
+        return false;
     }
 
     return calculated_checksum == received_checksum;

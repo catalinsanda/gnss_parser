@@ -17,7 +17,7 @@ class GNSSParser
 {
 public:
     static constexpr size_t BUFFER_SIZE = 2048;
-    static constexpr size_t MAX_MESSAGES = 10;
+    static constexpr size_t MAX_MESSAGES = 128;
 
     struct Message
     {
@@ -32,8 +32,6 @@ public:
         Type type;
         const uint8_t *data;
         size_t length;
-        bool valid;
-        const char *error;
     };
 
     struct ParseResult
@@ -48,7 +46,9 @@ public:
     ~GNSSParser() = default;
 
     bool encode(uint8_t byte);
+    bool encode(const uint8_t *buffer, size_t length);
     bool available() const;
+    size_t available_write_space() const;
     Message getMessage();
     void clear();
 
@@ -72,9 +72,9 @@ private:
     size_t read_pos_ = 0;
     size_t bytes_available_ = 0;
     std::queue<StoredMessage> message_queue_;
+    size_t earliest_queued_pos_ = 0;
 
-    void addMessageToQueue(Message::Type type, size_t start, size_t length,
-                           bool valid = true, const char *error = nullptr);
+    void addMessageToQueue(Message::Type type, size_t start, size_t length);
     void scanBuffer();
     bool validateRTCM3Message(size_t start, size_t length);
     uint8_t calculateNMEAChecksum(size_t start, size_t length);

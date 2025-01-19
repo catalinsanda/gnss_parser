@@ -5,6 +5,7 @@
 #include "GNSSParser.h"
 
 const char *ONE_VALID_NMEA_MESSAGE = "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n";
+const char *ANOHTER_VALID_NMEA_MESSAGE = "$GNRMC,140658.00,A,4430.39666339,N,02600.98986769,E,0.007,316.3,070125,6.1,E,M,S*5C\r\n";
 const char *ONE_VALID_NMEA_MESSAGE_WITH_A_PREFIX = "$GPGGA$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n";
 const char *ONE_VALID_ONE_NOT_NMEA_MESSAGES = "$GNGGA,140656.00,4430.39666339,N,02600.98986769,E,7,27,1.0,89.7706,M,35.4899,M,,*42\r\n"
                                               "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n";
@@ -51,79 +52,138 @@ void tearDown(void)
     // Called after each test
 }
 
+void process_nmea_messages(GNSSParser &parser, size_t &message_counter)
+{
+    while (parser.available())
+    {
+        auto msg = parser.getMessage();
+
+        char nmea_message[128];
+        uint8_t msg_length = std::min(sizeof(nmea_message) - 1, msg.length);
+        strncpy(nmea_message, (char *)msg.data, msg_length);
+        nmea_message[msg_length] = 0;
+
+        TEST_ASSERT_EQUAL(GNSSParser::Message::Type::NMEA, msg.type);
+
+        printf("Found message %d: %s", message_counter, nmea_message);
+        message_counter++;
+    }
+}
+
 void test_one_valid_nmea_message()
 {
     GNSSParser parser;
+    const uint8_t *data = (const uint8_t *)ONE_VALID_NMEA_MESSAGE;
+    size_t length = strlen(ONE_VALID_NMEA_MESSAGE);
+    size_t pos = 0;
 
-    for (size_t i = 0; i < strlen(ONE_VALID_NMEA_MESSAGE); i++)
+    while (pos < length)
     {
-        parser.encode(ONE_VALID_NMEA_MESSAGE[i]);
+        size_t available = parser.available_write_space();
+        TEST_ASSERT_TRUE(available > 0); // Should never fill up with one message
+
+        size_t to_write = std::min(available, length - pos);
+        TEST_ASSERT_TRUE(parser.encode(data + pos, to_write));
+        pos += to_write;
     }
 
     TEST_ASSERT_TRUE(parser.available());
-
     auto msg = parser.getMessage();
     TEST_ASSERT_EQUAL(GNSSParser::Message::Type::NMEA, msg.type);
-    TEST_ASSERT_TRUE(msg.valid);
     TEST_ASSERT_EQUAL(strlen(ONE_VALID_NMEA_MESSAGE), msg.length);
+}
+
+void test_another_valid_nmea_message()
+{
+    GNSSParser parser;
+    const uint8_t *data = (const uint8_t *)ANOHTER_VALID_NMEA_MESSAGE;
+    size_t length = strlen(ANOHTER_VALID_NMEA_MESSAGE);
+    size_t pos = 0;
+
+    while (pos < length)
+    {
+        size_t available = parser.available_write_space();
+        TEST_ASSERT_TRUE(available > 0); // Should never fill up with one message
+
+        size_t to_write = std::min(available, length - pos);
+        TEST_ASSERT_TRUE(parser.encode(data + pos, to_write));
+        pos += to_write;
+    }
+
+    TEST_ASSERT_TRUE(parser.available());
+    auto msg = parser.getMessage();
+    TEST_ASSERT_EQUAL(GNSSParser::Message::Type::NMEA, msg.type);
+    TEST_ASSERT_EQUAL(strlen(ANOHTER_VALID_NMEA_MESSAGE), msg.length);
 }
 
 void test_one_valid_nmea_message_with_prefix()
 {
     GNSSParser parser;
+    const uint8_t *data = (const uint8_t *)ONE_VALID_NMEA_MESSAGE_WITH_A_PREFIX;
+    size_t length = strlen(ONE_VALID_NMEA_MESSAGE_WITH_A_PREFIX);
+    size_t pos = 0;
 
-    for (size_t i = 0; i < strlen(ONE_VALID_NMEA_MESSAGE_WITH_A_PREFIX); i++)
+    while (pos < length)
     {
-        parser.encode(ONE_VALID_NMEA_MESSAGE_WITH_A_PREFIX[i]);
+        size_t available = parser.available_write_space();
+        TEST_ASSERT_TRUE(available > 0); // Should never fill up with one message
+
+        size_t to_write = std::min(available, length - pos);
+        TEST_ASSERT_TRUE(parser.encode(data + pos, to_write));
+        pos += to_write;
     }
 
     TEST_ASSERT_TRUE(parser.available());
-
     auto msg = parser.getMessage();
     TEST_ASSERT_EQUAL(GNSSParser::Message::Type::NMEA, msg.type);
-    TEST_ASSERT_TRUE(msg.valid);
     TEST_ASSERT_EQUAL(strlen(ONE_VALID_NMEA_MESSAGE), msg.length);
 }
 
 void test_two_messages_one_valid_one_not()
 {
     GNSSParser parser;
+    size_t message_counter = 0;
+    const uint8_t *data = (const uint8_t *)ONE_VALID_ONE_NOT_NMEA_MESSAGES;
+    size_t length = strlen(ONE_VALID_ONE_NOT_NMEA_MESSAGES);
+    size_t pos = 0;
 
-    auto message_counter = 0;
-
-    for (size_t i = 0; i < strlen(ONE_VALID_ONE_NOT_NMEA_MESSAGES); i++)
+    while (pos < length)
     {
-        parser.encode(ONE_VALID_ONE_NOT_NMEA_MESSAGES[i]);
-
-        if (parser.available())
+        size_t available = parser.available_write_space();
+        if (available == 0)
         {
-            auto msg = parser.getMessage();
-
-            char nmea_message[128];
-            uint8_t length = std::min(sizeof(nmea_message) - 1, msg.length);
-            strncpy(nmea_message, (char *)msg.data, length);
-            nmea_message[length] = 0;
-
-            TEST_ASSERT_EQUAL(GNSSParser::Message::Type::NMEA, msg.type);
-            TEST_ASSERT_TRUE(msg.valid);
-
-            printf("Found message %d: %s", message_counter, nmea_message);
-            message_counter++;
+            process_nmea_messages(parser, message_counter);
+            continue;
         }
+
+        size_t to_write = std::min(available, length - pos);
+        TEST_ASSERT_TRUE(parser.encode(data + pos, to_write));
+        pos += to_write;
     }
 
-    printf("Messages found %d\n", message_counter);
+    // Process any remaining messages
+    process_nmea_messages(parser, message_counter);
 
+    printf("Messages found %d\n", message_counter);
     TEST_ASSERT_EQUAL(1, message_counter);
 }
 
 void test_invalid_checksum()
 {
     GNSSParser parser;
+    const uint8_t *data = (const uint8_t *)INVALID_CHECKSUM;
+    size_t length = strlen(INVALID_CHECKSUM);
+    size_t pos = 0;
 
-    for (size_t i = 0; i < strlen(INVALID_CHECKSUM); i++)
+    while (pos < length)
     {
-        parser.encode(INVALID_CHECKSUM[i]);
+        size_t available = parser.available_write_space();
+        TEST_ASSERT_TRUE(available > 0);
+
+        size_t to_write = std::min(available, length - pos);
+        parser.encode(data + pos, to_write);
+        pos += to_write;
+
         TEST_ASSERT_FALSE(parser.available());
     }
 }
@@ -139,36 +199,59 @@ size_t countNewLines(const char *str, size_t maxLength)
 void test_parse_nmea_sentences()
 {
     GNSSParser parser;
+    size_t message_counter = 0;
+    const uint8_t *data = (const uint8_t *)BULK_NMEA_MESSAGES;
+    size_t length = strlen(BULK_NMEA_MESSAGES);
+    size_t pos = 0;
 
-    auto message_counter = 0;
-
-    for (size_t i = 0; i < strlen(BULK_NMEA_MESSAGES); i++)
+    while (pos < length)
     {
-        parser.encode(BULK_NMEA_MESSAGES[i]);
-
-        if (parser.available())
+        size_t available = parser.available_write_space();
+        if (available == 0)
         {
-            auto msg = parser.getMessage();
-
-            char nmea_message[128];
-            uint8_t length = std::min(sizeof(nmea_message) - 1, msg.length);
-            strncpy(nmea_message, (char *)msg.data, length);
-            nmea_message[length] = 0;
-
-            TEST_ASSERT_EQUAL(GNSSParser::Message::Type::NMEA, msg.type);
-            TEST_ASSERT_TRUE(msg.valid);
-
-            printf("Found message %d: %s", message_counter, nmea_message);
-            message_counter++;
+            process_nmea_messages(parser, message_counter);
+            continue;
         }
+
+        size_t to_write = std::min(available, length - pos);
+        TEST_ASSERT_TRUE(parser.encode(data + pos, to_write));
+        pos += to_write;
     }
 
-    printf("Messages found %d\n", message_counter);
+    process_nmea_messages(parser, message_counter);
 
-    TEST_ASSERT_EQUAL(countNewLines(BULK_NMEA_MESSAGES, strlen(BULK_NMEA_MESSAGES) + 1), message_counter);
+    printf("Messages found %d\n", message_counter);
+    TEST_ASSERT_EQUAL(countNewLines(BULK_NMEA_MESSAGES, strlen(BULK_NMEA_MESSAGES) + 1),
+                      message_counter);
 }
 
-void test_parse_log_file(const char *filename, uint32_t expected_nmea_count, uint32_t expected_rtcm_count)
+void process_parser_messages(GNSSParser &parser, uint32_t &nmea_count, uint32_t &rtcm_count)
+{
+    while (parser.available())
+    {
+        auto msg = parser.getMessage();
+        if (msg.type == GNSSParser::Message::Type::NMEA)
+        {
+            printf("NMEA [VALID]: ");
+            fwrite(msg.data, 1, msg.length, stdout);
+            printf("\n");
+            nmea_count++;
+        }
+        else if (msg.type == GNSSParser::Message::Type::RTCM3)
+        {
+            // printf("RTCM3 [VALID] Length: %zu Data: ", msg.length);
+            for (size_t j = 0; j < msg.length; j++)
+            {
+                // printf("%02X", msg.data[j]);
+            }
+            // printf("\n");
+            rtcm_count++;
+        }
+    }
+}
+
+void test_parse_log_file(const char *filename, uint32_t expected_nmea_count,
+                         uint32_t expected_rtcm_count)
 {
     printf("\nTesting file: %s\n", filename);
     printf("Expected NMEA messages: %u, Expected RTCM messages: %u\n",
@@ -178,62 +261,43 @@ void test_parse_log_file(const char *filename, uint32_t expected_nmea_count, uin
     TEST_ASSERT_NOT_NULL_MESSAGE(file, "Failed to open test file");
 
     GNSSParser parser;
-    uint8_t buffer[1024];
+    uint8_t buffer[16];
     size_t bytes_read;
-
     uint32_t nmea_count = 0;
     uint32_t rtcm_count = 0;
+    uint32_t total_bytes_read = 0;
 
-    // Process file in chunks
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0)
     {
-        for (size_t i = 0; i < bytes_read; i++)
+        total_bytes_read += bytes_read;
+        size_t pos = 0;
+        while (pos < bytes_read)
         {
-            parser.encode(buffer[i]);
+            if (parser.available())
+                process_parser_messages(parser, nmea_count, rtcm_count);
 
-            // Process any available messages
-            while (parser.available())
-            {
-                auto msg = parser.getMessage();
-
-                if (msg.type == GNSSParser::Message::Type::NMEA)
-                {
-                    // Print NMEA messages as ASCII
-                    printf("NMEA [%s]: ", msg.valid ? "VALID" : "INVALID");
-                    fwrite(msg.data, 1, msg.length, stdout);
-
-                    if (!msg.valid && msg.error)
-                    {
-                        printf("Error: %s\n", msg.error);
-                    }
-
-                    if (msg.valid)
-                        nmea_count++;
-                }
-                else if (msg.type == GNSSParser::Message::Type::RTCM3)
-                {
-                    // Print RTCM messages as hex
-                    printf("RTCM3 [%s] Length: %zu Data: ",
-                           msg.valid ? "VALID" : "INVALID",
-                           msg.length);
-
-                    for (size_t j = 0; j < msg.length; j++)
-                    {
-                        printf("%02X", msg.data[j]);
-                    }
-                    printf("\n");
-
-                    if (!msg.valid && msg.error)
-                    {
-                        printf("Error: %s\n", msg.error);
-                    }
-
-                    if (msg.valid)
-                        rtcm_count++;
-                }
-            }
+            TEST_ASSERT_FALSE(parser.available());
+            size_t available = parser.available_write_space();
+            TEST_ASSERT_GREATER_THAN(0, available);
+            size_t to_write = std::min(available, bytes_read - pos);
+            TEST_ASSERT_TRUE(parser.encode(buffer + pos, to_write));
+            pos += to_write;
         }
     }
+
+    for (int i = 0; i++; i++)
+        buffer[i] = 0;
+
+    for (int i = 0; i < 1024 / sizeof(buffer); i++)
+    {
+        if (parser.available())
+            process_parser_messages(parser, nmea_count, rtcm_count);
+
+        TEST_ASSERT_TRUE(parser.encode(buffer, sizeof(buffer)));
+    }
+
+    // Process any remaining messages
+    process_parser_messages(parser, nmea_count, rtcm_count);
 
     fclose(file);
 
@@ -247,6 +311,27 @@ void test_parse_log_file(const char *filename, uint32_t expected_nmea_count, uin
                                      "Incorrect number of valid RTCM messages");
 }
 
+void process_random_test_messages(GNSSParser &parser, size_t &messages_found, int test)
+{
+    while (parser.available())
+    {
+        auto msg = parser.getMessage();
+        if (msg.type != GNSSParser::Message::UNKNOWN)
+        {
+            messages_found++;
+            printf("WARNING: Found valid message in random data!\n");
+            printf("Test iteration: %d\n", test);
+            printf("Message type: %d, Length: %zu\n", msg.type, msg.length);
+            printf("Message data: ");
+            for (size_t j = 0; j < msg.length; j++)
+            {
+                printf("%02X", msg.data[j]);
+            }
+            printf("\n");
+        }
+    }
+}
+
 void test_random_data_parse()
 {
     // Use fixed seed for reproducibility
@@ -256,6 +341,7 @@ void test_random_data_parse()
     {
         GNSSParser parser;
         uint8_t random_data[4096];
+        size_t messages_found = 0;
 
         srand(time(NULL));
 
@@ -265,32 +351,24 @@ void test_random_data_parse()
             random_data[i] = rand() & 0xFF;
         }
 
-        // Feed data to parser
-        size_t messages_found = 0;
-
-        for (size_t i = 0; i < sizeof(random_data); i++)
+        // Feed data in chunks based on available space
+        size_t pos = 0;
+        while (pos < sizeof(random_data))
         {
-            parser.encode(random_data[i]);
-
-            while (parser.available())
+            size_t available = parser.available_write_space();
+            if (available == 0)
             {
-                auto msg = parser.getMessage();
-                if (msg.valid)
-                {
-                    messages_found++;
-
-                    printf("WARNING: Found valid message in random data!\n");
-                    printf("Test iteration: %d, Byte position: %zu\n", test, i);
-                    printf("Message type: %d, Length: %zu\n", msg.type, msg.length);
-                    printf("Message data: ");
-                    for (size_t j = 0; j < msg.length; j++)
-                    {
-                        printf("%02X", msg.data[j]);
-                    }
-                    printf("\n");
-                }
+                process_random_test_messages(parser, messages_found, test);
+                continue;
             }
+
+            size_t to_write = std::min(available, sizeof(random_data) - pos);
+            TEST_ASSERT_TRUE(parser.encode(random_data + pos, to_write));
+            pos += to_write;
         }
+
+        // Process any remaining messages
+        process_random_test_messages(parser, messages_found, test);
 
         TEST_ASSERT_EQUAL_MESSAGE(0, messages_found,
                                   "Parser incorrectly identified valid messages in random data");
@@ -309,48 +387,27 @@ void test_parse_log_file_56_4()
     test_parse_log_file("test/test-data/test-data-56-5.bin", 56, 4);
 }
 
-void test_parse_log_file_654_43()
+void test_parse_log_file_656_43()
 {
-    test_parse_log_file("test/test-data/test-data-654-43.bin", 654, 43);
+    test_parse_log_file("test/test-data/test-data-656-43.bin", 656, 43);
 }
 
-void test_parse_log_file_32477_2193()
+void test_parse_log_file_33807_2193()
 {
-    test_parse_log_file("test/test-data/test-data-32477-2193.bin", 32477, 2193);
+    test_parse_log_file("test/test-data/test-data-33807-2193.bin", 33807, 2193);
 }
 
-void process()
+void register_nmea_tests()
 {
-    UNITY_BEGIN();
     RUN_TEST(test_one_valid_nmea_message);
+    RUN_TEST(test_another_valid_nmea_message);
     RUN_TEST(test_one_valid_nmea_message_with_prefix);
     RUN_TEST(test_two_messages_one_valid_one_not);
     RUN_TEST(test_invalid_checksum);
     RUN_TEST(test_parse_nmea_sentences);
+    RUN_TEST(test_random_data_parse);
     RUN_TEST(test_parse_log_file_5_2);
     RUN_TEST(test_parse_log_file_56_4);
-    RUN_TEST(test_parse_log_file_654_43);
-    RUN_TEST(test_parse_log_file_32477_2193);
-    RUN_TEST(test_random_data_parse);
-    UNITY_END();
+    RUN_TEST(test_parse_log_file_656_43);
+    RUN_TEST(test_parse_log_file_33807_2193);
 }
-
-#ifdef ARDUINO
-void setup()
-{
-    delay(2000);
-    process();
-}
-
-void loop()
-{
-    delay(1000);
-}
-#else
-
-int main(int argc, char **argv)
-{
-    process();
-    return 0;
-}
-#endif
